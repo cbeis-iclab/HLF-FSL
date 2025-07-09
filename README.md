@@ -1,93 +1,125 @@
-# HLF-FSL
+# HLF-FSL: Hyperledger Fabric Federated Split Learning
 
+Decentralized Federated Split Learning (FSL) on Hyperledger Fabric using transient fields, Private Data Collections, and off-chain storage for large parameters.
 
+Based on: Beis-Penedo et al., “HLF-FSL: A Decentralized Federated Split Learning Solution for IoT on Hyperledger Fabric” 
 
-## Getting started
+### Architecture Overview
 
-To make it easy for you to get started with GitLab, here's a list of recommended next steps.
+The system consists of four main components:
+1.  **Hyperledger Fabric Network**: Provides the decentralized trust layer. It manages participant identities (via MSPs), records hashes of model updates, and enforces access control policies for private data collections.
+2.  **IPFS (InterPlanetary File System)**: Acts as the off-chain storage for large data objects. Instead of bloating the blockchain, we store bulky ML data (activations, gradients, model weights) in IPFS and record only their immutable content identifiers (CIDs) on the ledger.
+3.  **TypeScript API Servers**: These act as secure proxies between the Python ML application and the Fabric network. Each participating organization runs its own API server, which holds the cryptographic identity necessary to interact with the blockchain on its behalf.
+4.  **Python ML Application**: This is the core Split Federated Learning application. It uses `PyTorch` to define and train the split models. It runs multiple client threads and a server thread, which communicate with their respective API servers to interact with the Fabric network and use a local IPFS interface for data exchange.
 
-Already a pro? Just edit this README.md and make it your own. Want to make it easy? [Use the template at the bottom](#editing-this-readme)!
+### Project Overview
 
-## Add your files
+This project implements Federated Split Learning on Hyperledger Fabric. Key components:
 
-- [ ] [Create](https://docs.gitlab.com/ee/user/project/repository/web_editor.html#create-a-file) or [upload](https://docs.gitlab.com/ee/user/project/repository/web_editor.html#upload-a-file) files
-- [ ] [Add files using the command line](https://docs.gitlab.com/topics/git/add_files/#add-files-to-a-git-repository) or push an existing Git repository with the following command:
+- **`.gitignore`**  
+  Excludes build artifacts, credentials, and other ephemeral files.
 
-```
-cd existing_repo
-git remote add origin https://gitlab.com/compromise3/hlf-fsl.git
-git branch -M main
-git push -uf origin main
-```
+- **`LICENSE`**  
+  Project licensing terms.
 
-## Integrate with your tools
+- **`README.md`**  
+  This overview and usage instructions.
 
-- [ ] [Set up project integrations](https://gitlab.com/compromise3/hlf-fsl/-/settings/integrations)
+- **`requirements.txt`**  
+  Python dependencies for the Fabric-client and IPFS integration.
 
-## Collaborate with your team
+- **`api-ts/`**  
+  TypeScript-based REST/WebSocket API bridge between the Python client and Fabric network.  
+  - `src/client.ts` Fabric Gateway client  
+  - `src/gateway.ts` Gateway helper  
+  - `src/server.ts` Express/WebSocket server  
+  - `package.json`, `tsconfig.json` TypeScript project config  
+  - `startserver.sh` Build & launch script
 
-- [ ] [Invite team members and collaborators](https://docs.gitlab.com/ee/user/project/members/)
-- [ ] [Create a new merge request](https://docs.gitlab.com/ee/user/project/merge_requests/creating_merge_requests.html)
-- [ ] [Automatically close issues from merge requests](https://docs.gitlab.com/ee/user/project/issues/managing_issues.html#closing-issues-automatically)
-- [ ] [Enable merge request approvals](https://docs.gitlab.com/ee/user/project/merge_requests/approvals/)
-- [ ] [Set auto-merge](https://docs.gitlab.com/user/project/merge_requests/auto_merge/)
+- **`fsl-chaincode/`**  
+  Chaincode definition and deployment artifacts.  
+  - `chaincode/fsl_chaincode.go` Go smart contract implementing FSL logic  
+  - `chaincode/collections_config.json` PDC policy file  
+  - `deployFSL.sh` Installs and instantiates chaincode  
+  - `generate_collections_config.py` Generates `collections_config.json` for arbitrary MSP lists
 
-## Test and Deploy
+- **`src/fabric_project/`**  
+  Python-based orchestrator and experiment runner.  
+  - `client.py`, `server.py` Client/server roles for split learning  
+  - `main.py` Entry point to launch experiments  
+  - `models.py`, `evaluation.py` ML model definitions and metrics  
+  - `ipfs_interface.py`, `storage.py` IPFS integration and results persistence  
+  - `config.py` Experiment parameters (clients, epochs, network addresses)  
+  - `startIpfs.sh` Local IPFS daemon launcher  
+  - `results_fabric/` Output directory for experiment data
 
-Use the built-in continuous integration in GitLab.
+Use this overview to navigate the codebase and locate components for network setup, chaincode deployment, API services, or experiment execution.```
 
-- [ ] [Get started with GitLab CI/CD](https://docs.gitlab.com/ee/ci/quick_start/)
-- [ ] [Analyze your code for known vulnerabilities with Static Application Security Testing (SAST)](https://docs.gitlab.com/ee/user/application_security/sast/)
-- [ ] [Deploy to Kubernetes, Amazon EC2, or Amazon ECS using Auto Deploy](https://docs.gitlab.com/ee/topics/autodevops/requirements.html)
-- [ ] [Use pull-based deployments for improved Kubernetes management](https://docs.gitlab.com/ee/user/clusters/agent/)
-- [ ] [Set up protected environments](https://docs.gitlab.com/ee/ci/environments/protected_environments.html)
+## Prerequisites
 
-***
+- Docker & Docker Compose  
+- Hyperledger Fabric binaries (`peer`, `orderer`, `configtxgen`, `cryptogen`) in your `$PATH`  
+- Go (v1.18+)  
+- Node.js (v16+) & npm  
+- Python 3.8+ & pip  
+- IPFS CLI (`ipfs`)
 
-# Editing this README
+### Step-by-Step Execution Guide
+## Setup
 
-When you're ready to make this README your own, just edit this file and use the handy template below (or feel free to structure it however you want - this is just a starting point!). Thanks to [makeareadme.com](https://www.makeareadme.com/) for this template.
+1. **Clone the repository**  
+   Use Git to clone this project and enter its directory.
 
-## Suggestions for a good README
+2. **Install dependencies**  
+   - In the `api-ts` folder, install Node.js packages with `npm install`.  
+   - At the project root, install Python dependencies with `pip install -r requirements.txt`.
 
-Every project is different, so consider which of these sections apply to yours. The sections used in the template are suggestions for most open source projects. Also keep in mind that while a README can be too long and detailed, too long is better than too short. If you think your README is too long, consider utilizing another form of documentation rather than cutting out information.
+## Step 1: Launch Fabric Network
 
-## Name
-Choose a self-explaining name for your project.
+Navigate to your local Fabric test-network (from fabric-samples), bring up the network with Certificate Authorities and create the channel. This generates MSPs, CAs, peers, an orderer and joins default peers.
 
-## Description
-Let people know what your project can do specifically. Provide context and add a link to any reference visitors might be unfamiliar with. A list of Features or a Background subsection can also be added here. If there are alternatives to your project, this is a good place to list differentiating factors.
+Return to the project root when complete.
 
-## Badges
-On some READMEs, you may see small images that convey metadata, such as whether or not all the tests are passing for the project. You can use Shields to add some to your README. Many services also have instructions for adding a badge.
+## Step 2: Generate Collections Config for 3 Orgs
 
-## Visuals
-Depending on what you are making, it can be a good idea to include screenshots or even a video (you'll frequently see GIFs rather than actual videos). Tools like ttygif can help, but check out Asciinema for a more sophisticated method.
+Use the Python script in `fsl-chaincode` to generate a Private Data Collections configuration for three organizations (Org1MSP, Org2MSP, Org3MSP), including the Admin MSP in the global policy. Save the output to `chaincode/collections_config.json`. You may need to re-run the deployment script after updating this file.
 
-## Installation
-Within a particular ecosystem, there may be a common way of installing things, such as using Yarn, NuGet, or Homebrew. However, consider the possibility that whoever is reading your README is a novice and would like more guidance. Listing specific steps helps remove ambiguity and gets people to using your project as quickly as possible. If it only runs in a specific context like a particular programming language version or operating system or has dependencies that have to be installed manually, also add a Requirements subsection.
+## Step 3: Deploy Chaincode
 
-## Usage
-Use examples liberally, and show the expected output if you can. It's helpful to have inline the smallest example of usage that you can demonstrate, while providing links to more sophisticated examples if they are too long to reasonably include in the README.
+In the `fsl-chaincode` directory, run the deployment script to package, install and instantiate the `fsl` smart contract on the channel.
 
-## Support
-Tell people where they can go to for help. It can be any combination of an issue tracker, a chat room, an email address, etc.
+## Step 4: Start Services
 
-## Roadmap
-If you have ideas for releases in the future, it is a good idea to list them in the README.
+- **IPFS**: In `src/fabric_project`, launch the local IPFS daemon for off-chain storage. Keep this terminal open.  
+- **TypeScript APIs**: In `api-ts`, start the API servers that bridge the Python application and Fabric network. Before launching, update the `CLIENTS` array in `startserver.sh` to reflect the three organizations.
 
-## Contributing
-State if you are open to contributions and what your requirements are for accepting them.
+## Step 5: Run the SFL Experiment
 
-For people who want to make changes to your project, it's helpful to have some documentation on how to get started. Perhaps there is a script that they should run or some environment variables that they need to set. Make these steps explicit. These instructions could also be useful to your future self.
+In `src/fabric_project`, run the main Python application to kick off the federated split learning process. The experiment will use the number of clients and epochs specified in `config.py`, and will output results into the `results_fabric/` directory.
 
-You can also document commands to lint the code or run tests. These steps help to ensure high code quality and reduce the likelihood that the changes inadvertently break something. Having instructions for running tests is especially helpful if it requires external setup, such as starting a Selenium server for testing in a browser.
+## Scaling to More Organizations
 
-## Authors and acknowledgment
-Show your appreciation to those who have contributed to the project.
+To extend beyond three organizations:
 
-## License
-For open source projects, say how it is licensed.
+1. **Fabric Crypto**  
+   Add a new OrgN entry to your crypto-config (or Fabric-CA registrar scripts) and generate MSP materials for OrgN.
 
-## Project status
-If you have run out of energy or time for your project, put a note at the top of the README saying that development has slowed down or stopped completely. Someone may choose to fork your project or volunteer to step in as a maintainer or owner, allowing your project to keep going. You can also make an explicit request for maintainers.
+2. **Channel Configuration**  
+   Append `OrgNMSP` in `configtx.yaml` under the `Organizations` list and in your channel profile’s `Application.Organizations` section.
+
+3. **Docker Compose**  
+   Extend the test-network compose files to include a new peer service for `peer0.orgN.example.com`, ensuring unique port mappings.
+
+4. **Network Scripts**  
+   Update `envVar.sh` and `createChannel.sh` to include OrgN in the global variables and channel-join logic.
+
+5. **Recreate Network**  
+   Tear down the existing network, then bring it back up with the updated definitions and join all peers.
+
+6. **Application Updates**  
+   - Re-generate your PDC configuration including the new MSP.  
+   - Update the `CLIENTS` array in `api-ts/startserver.sh`.  
+   - Adjust `NUM_CLIENTS` in `src/fabric_project/config.py`.  
+   - Re-deploy the chaincode and re-run the services and experiment.
+
+Refer to the source paper for detailed protocol design and rationale. All scripts can be further modified for fully dynamic client configurations.```
