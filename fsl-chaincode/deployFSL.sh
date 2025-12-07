@@ -18,4 +18,6 @@ export PATH=${PWD}/../bin:$PATH
 export FABRIC_CFG_PATH=$PWD/../config/
 
 peer lifecycle chaincode package fsl.tar.gz --path fsl --lang golang --label fsl_1
-./network.sh deployCC -ccn fsl -ccp ./fsl/ -ccl go -cccg ./fsl/collections_config.json
+./network.sh deployCC -ccn fsl -ccp ./fsl/ -ccl go -ccv 1.0 -ccs 1 -cccg ./fsl/collections_config.json -ccep "OR('Org1MSP.peer','Org2MSP.peer','Org3MSP.peer')"
+
+# "OutOf(2,'Org1MSP.peer','Org2MSP.peer','Org3MSP.peer','Org4MSP.peer','Org5MSP.peer','Org6MSP.peer','Org7MSP.peer','Org8MSP.peer','Org9MSP.peer','Org10MSP.peer','Org11MSP.peer','Org12MSP.peer','Org13MSP.peer','Org14MSP.peer','Org15MSP.peer','Org16MSP.peer','Org17MSP.peer','Org18MSP.peer','Org19MSP.peer','Org20MSP.peer','Org21MSP.peer','Org22MSP.peer','Org23MSP.peer','Org24MSP.peer','Org25MSP.peer')"

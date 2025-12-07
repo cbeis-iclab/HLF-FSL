@@ -6,6 +6,7 @@ import (
 	"fmt"
 
 	"github.com/hyperledger/fabric-chaincode-go/pkg/cid"
+	"github.com/hyperledger/fabric-chaincode-go/shim"
 	"github.com/hyperledger/fabric-contract-api-go/contractapi"
 )
 
@@ -31,6 +32,50 @@ type GlobalModelCommit struct {
 	IPFSCid                   string `json:"ipfsCid"`
 	ClientID                  string `json:"clientID"`
 }
+
+// -------------------------------------------------------------
+// HELPER: Auto-Discovery de MSPs
+// -------------------------------------------------------------
+const RegisteredMSPsKey = "ALL_REGISTERED_MSPS"
+
+func (s *SplitLearningContract) ensureMSPRegistered(stub shim.ChaincodeStubInterface, mspID string) error {
+	// 1. Leer la lista actual
+	bytes, err := stub.GetState(RegisteredMSPsKey)
+	if err != nil {
+		return fmt.Errorf("failed to read registered MSPs: %v", err)
+	}
+
+	var msps []string
+	if bytes != nil {
+		if err := json.Unmarshal(bytes, &msps); err != nil {
+			return fmt.Errorf("failed to unmarshal MSP list: %v", err)
+		}
+	}
+
+	// 2. Comprobar si ya existe
+	for _, m := range msps {
+		if m == mspID {
+			return nil // Ya está registrado, no hacemos nada
+		}
+	}
+
+	// 3. Si es nuevo, añadirlo y guardar
+	msps = append(msps, mspID)
+	newBytes, err := json.Marshal(msps)
+	if err != nil {
+		return fmt.Errorf("failed to marshal MSP list: %v", err)
+	}
+
+	if err := stub.PutState(RegisteredMSPsKey, newBytes); err != nil {
+		return fmt.Errorf("failed to update registered MSPs: %v", err)
+	}
+
+	return nil
+}
+
+// -------------------------------------------------------------
+// FUNCIONES DEL CONTRATO
+// -------------------------------------------------------------
 
 func (s *SplitLearningContract) RegisterServer(ctx contractapi.TransactionContextInterface, topic string) (string, error) {
 	creator, err := ctx.GetStub().GetCreator()
@@ -67,18 +112,13 @@ func (s *SplitLearningContract) GetServerAddress(ctx contractapi.TransactionCont
 	}
 	defer resultsIterator.Close()
 
-	// Create a slice to store the server addresses
 	var serverAddresses []string
-
-	// Iterate through the result set and collect all server addresses
 	for resultsIterator.HasNext() {
 		queryResponse, err := resultsIterator.Next()
 		if err != nil {
 			return nil, fmt.Errorf("failed to iterate results: %v", err)
 		}
-
-		serverAddress := queryResponse.Key
-		serverAddresses = append(serverAddresses, serverAddress)
+		serverAddresses = append(serverAddresses, queryResponse.Key)
 	}
 
 	if len(serverAddresses) == 0 {
@@ -89,7 +129,8 @@ func (s *SplitLearningContract) GetServerAddress(ctx contractapi.TransactionCont
 }
 
 func (s *SplitLearningContract) RegisterClient(ctx contractapi.TransactionContextInterface, serverAddress string) (string, error) {
-	creator, err := ctx.GetStub().GetCreator()
+	stub := ctx.GetStub()
+	creator, err := stub.GetCreator()
 	if err != nil {
 		return "", fmt.Errorf("failed to get creator: %v", err)
 	}
@@ -97,7 +138,7 @@ func (s *SplitLearningContract) RegisterClient(ctx contractapi.TransactionContex
 	creatorBase64 := base64.StdEncoding.EncodeToString(creator)
 	clientKey := fmt.Sprintf("clientToServer:%s", creatorBase64)
 
-	existingServer, err := ctx.GetStub().GetState(clientKey)
+	existingServer, err := stub.GetState(clientKey)
 	if err != nil {
 		return "", fmt.Errorf("failed to get state: %v", err)
 	}
@@ -106,7 +147,7 @@ func (s *SplitLearningContract) RegisterClient(ctx contractapi.TransactionContex
 	}
 
 	serverKey := fmt.Sprintf("server:%s", serverAddress)
-	registeredServer, err := ctx.GetStub().GetState(serverKey)
+	registeredServer, err := stub.GetState(serverKey)
 	if err != nil {
 		return "", fmt.Errorf("failed to get state: %v", err)
 	}
@@ -114,22 +155,24 @@ func (s *SplitLearningContract) RegisterClient(ctx contractapi.TransactionContex
 		return "", fmt.Errorf("server is not registered")
 	}
 
-	err = ctx.GetStub().PutState(clientKey, []byte(serverAddress))
+	err = stub.PutState(clientKey, []byte(serverAddress))
 	if err != nil {
 		return "", fmt.Errorf("failed to put state: %v", err)
 	}
-	return creatorBase64, nil // Return the client ID
+
+	// AUTO-DISCOVERY: Registramos el MSP del cliente al registrarse
+	mspID, err := cid.GetMSPID(stub)
+	if err == nil {
+		s.ensureMSPRegistered(stub, mspID)
+	}
+
+	return creatorBase64, nil
 }
 
-// AddIntermediateData reads the IPFS CID from the transient map,
-// stores it in the PDC, then records the private‐data hash on‐ledger
-// and emits an event with that hash + TxID.
 func (s *SplitLearningContract) AddIntermediateData(ctx contractapi.TransactionContextInterface) error {
 	stub := ctx.GetStub()
 
-	// ———————————————
-	// 1. Who is calling? get both their serialized identity & their MSP ID
-	// ———————————————
+	// 1. Identity & MSP
 	creatorBytes, err := stub.GetCreator()
 	if err != nil {
 		return fmt.Errorf("GetCreator failed: %v", err)
@@ -141,9 +184,13 @@ func (s *SplitLearningContract) AddIntermediateData(ctx contractapi.TransactionC
 		return fmt.Errorf("GetMSPID failed: %v", err)
 	}
 
-	// ———————————————
+	// ✅ AUTO-DISCOVERY: Aseguramos que este MSP esté en la lista global
+	if err := s.ensureMSPRegistered(stub, mspID); err != nil {
+		// Logueamos pero no fallamos la transacción por esto si es un error menor de concurrencia
+		fmt.Printf("Warning: failed to register MSP dynamically: %v\n", err)
+	}
+
 	// 2. Verify client→server binding
-	// ———————————————
 	assocKey := fmt.Sprintf("clientToServer:%s", clientID)
 	serverAddr, err := stub.GetState(assocKey)
 	if err != nil {
@@ -153,9 +200,7 @@ func (s *SplitLearningContract) AddIntermediateData(ctx contractapi.TransactionC
 		return fmt.Errorf("client %s not bound to any server", clientID)
 	}
 
-	// ———————————————
-	// 3. Pull the IPFS CID from transient map
-	// ———————————————
+	// 3. Pull the IPFS CID
 	transientMap, err := stub.GetTransient()
 	if err != nil {
 		return fmt.Errorf("GetTransient failed: %v", err)
@@ -165,9 +210,8 @@ func (s *SplitLearningContract) AddIntermediateData(ctx contractapi.TransactionC
 		return fmt.Errorf("transient 'cid' not found")
 	}
 	ipfsCID := string(cidBytes)
-	// ———————————————
+
 	// 4. Write into the per-MSP PDC
-	// ———————————————
 	mspMapKey := fmt.Sprintf("clientToMSP-%s", clientID)
 	if err := stub.PutState(mspMapKey, []byte(mspID)); err != nil {
 		return fmt.Errorf("failed to record client MSP: %v", err)
@@ -183,9 +227,7 @@ func (s *SplitLearningContract) AddIntermediateData(ctx contractapi.TransactionC
 		return fmt.Errorf("PutPrivateData failed on %s: %v", collName, err)
 	}
 
-	// ———————————————
-	// 5. Grab the hash and write it on‐ledger
-	// ———————————————
+	// 5. Grab hash
 	hashBytes, err := stub.GetPrivateDataHash(collName, pdcKey)
 	if err != nil {
 		return fmt.Errorf("GetPrivateDataHash failed: %v", err)
@@ -195,7 +237,7 @@ func (s *SplitLearningContract) AddIntermediateData(ctx contractapi.TransactionC
 		return fmt.Errorf("PutState failed: %v", err)
 	}
 
-	// 6. Emit an event (including MSP so server can pick it up)
+	// 6. Emit event
 	eventName := fmt.Sprintf("IntermediateDataAdded:%s", clientID)
 	eventPayload, _ := json.Marshal(map[string]string{
 		"dataHash": ipfsCID,
@@ -210,7 +252,6 @@ func (s *SplitLearningContract) AddIntermediateData(ctx contractapi.TransactionC
 }
 
 func (s *SplitLearningContract) AddGradients(ctx contractapi.TransactionContextInterface, clientBase64 string) error {
-
 	stub := ctx.GetStub()
 
 	// 1. Verify this server is indeed bound to that client
@@ -249,6 +290,7 @@ func (s *SplitLearningContract) AddGradients(ctx contractapi.TransactionContextI
 		return fmt.Errorf("transient 'cid' not found")
 	}
 	ipfsCID := string(gradCID)
+
 	// 3. Write to PDC
 	collName := fmt.Sprintf("intermediateDataHashCollection%s", clientMSP)
 	pdcKey := fmt.Sprintf("gradients-%s", clientBase64)
@@ -268,7 +310,7 @@ func (s *SplitLearningContract) AddGradients(ctx contractapi.TransactionContextI
 		return fmt.Errorf("PutState failed: %v", err)
 	}
 
-	// 6. Emit event (include MSP again for clarity)
+	// 6. Emit event
 	eventName := fmt.Sprintf("GradientsAdded:%s", clientBase64)
 	eventPayload, _ := json.Marshal(map[string]string{
 		"dataHash": ipfsCID,
@@ -285,9 +327,6 @@ func (s *SplitLearningContract) AddGradients(ctx contractapi.TransactionContextI
 func (s *SplitLearningContract) SubmitClientModelHash(ctx contractapi.TransactionContextInterface, roundID string, datasetSizeStr string) error {
 	stub := ctx.GetStub()
 
-	// ——————————
-	// 1. Who is calling? identity + MSP
-	// ——————————
 	creator, err := stub.GetCreator()
 	if err != nil {
 		return fmt.Errorf("GetCreator failed: %v", err)
@@ -299,9 +338,9 @@ func (s *SplitLearningContract) SubmitClientModelHash(ctx contractapi.Transactio
 		return fmt.Errorf("GetMSPID failed: %v", err)
 	}
 
-	// ——————————
-	// 2. Pull the model-hash from transient
-	// ——————————
+	// ✅ AUTO-DISCOVERY: Por si acaso no se registró antes
+	s.ensureMSPRegistered(stub, mspID)
+
 	tm, err := stub.GetTransient()
 	if err != nil {
 		return fmt.Errorf("GetTransient failed: %v", err)
@@ -312,9 +351,6 @@ func (s *SplitLearningContract) SubmitClientModelHash(ctx contractapi.Transactio
 	}
 	modelHash := string(hashBytes)
 
-	// ——————————
-	// 4. Write full update JSON into the per-MSP PDC
-	// ——————————
 	collName := fmt.Sprintf("clientModelHashCollection%s", mspID)
 	update := ClientModelUpdate{
 		RoundID:        roundID,
@@ -331,9 +367,6 @@ func (s *SplitLearningContract) SubmitClientModelHash(ctx contractapi.Transactio
 		return fmt.Errorf("PutPrivateData failed on %s: %v", collName, err)
 	}
 
-	// ——————————
-	// 5. Grab Fabric’s SHA-256 of that private entry, write it on-ledger
-	// ——————————
 	hashOnLedger, err := stub.GetPrivateDataHash(collName, pdcKey)
 	if err != nil {
 		return fmt.Errorf("GetPrivateDataHash failed: %v", err)
@@ -346,55 +379,55 @@ func (s *SplitLearningContract) SubmitClientModelHash(ctx contractapi.Transactio
 	return nil
 }
 
-// triggerClientAggregation initiates the aggregation process for a given round.
-// It reads all model hashes from the PDC and emits an event for clients to start aggregation.
 func (s *SplitLearningContract) TriggerClientAggregation(ctx contractapi.TransactionContextInterface, roundID string) error {
 	stub := ctx.GetStub()
 
-	// 1) List the MSPs whose PDCs we need to scan
-	//    (adjust this slice to match your network)
-	msps := []string{"Org1MSP", "Org2MSP"}
+	bytes, err := stub.GetState(RegisteredMSPsKey)
+	if err != nil {
+		return fmt.Errorf("failed to get registered MSPs: %v", err)
+	}
+	var msps []string
+	if bytes != nil {
+		json.Unmarshal(bytes, &msps)
+	}
+
+	if len(msps) == 0 {
+		msps = []string{"Org1MSP", "Org2MSP"}
+	}
 
 	prefix := fmt.Sprintf("clientUpdate-%s-", roundID)
 	var allUpdates []ClientModelUpdate
 	endKey := prefix + "\u00FF"
 
-	// 2) For each MSP’s PDC, pull every key and fetch its private-data hash
+	// 2) Iterar sobre los MSPs descubiertos dinámicamente
 	for _, mspID := range msps {
 		collName := fmt.Sprintf("clientModelHashCollection%s", mspID)
+
 		iter, err := stub.GetPrivateDataByRange(collName, prefix, endKey)
 		if err != nil {
-			return fmt.Errorf("GetPrivateDataByRange failed on %s [%s…%s]: %v",
-				collName, prefix, endKey, err)
+			fmt.Printf("Warning: Skipping collection %s: %v\n", collName, err)
+			continue
 		}
-		defer iter.Close()
 
-		for iter.HasNext() {
-			qr, err := iter.Next()
-			if err != nil {
-				return fmt.Errorf("PDC iterator error on %s: %v", collName, err)
+		func() {
+			defer iter.Close()
+			for iter.HasNext() {
+				qr, err := iter.Next()
+				if err != nil {
+					return
+				}
+
+				dataBytes, err := stub.GetPrivateData(collName, qr.Key)
+				if err != nil || len(dataBytes) == 0 {
+					continue
+				}
+
+				var upd ClientModelUpdate
+				if err := json.Unmarshal(dataBytes, &upd); err == nil {
+					allUpdates = append(allUpdates, upd)
+				}
 			}
-
-			// 3) Read the actual private‐data bytes
-			dataBytes, err := stub.GetPrivateData(collName, qr.Key)
-			if err != nil {
-				return fmt.Errorf("GetPrivateData failed for %s/%s: %v",
-					collName, qr.Key, err)
-			}
-			if len(dataBytes) == 0 {
-				return fmt.Errorf("empty private data for %s/%s", collName, qr.Key)
-			}
-
-			// 4) Unmarshal into your struct
-			var upd ClientModelUpdate
-			if err := json.Unmarshal(dataBytes, &upd); err != nil {
-				return fmt.Errorf("unmarshal update failed for %s/%s: %v",
-					collName, qr.Key, err)
-			}
-
-			allUpdates = append(allUpdates, upd)
-
-		}
+		}()
 	}
 
 	if len(allUpdates) == 0 {
@@ -421,8 +454,6 @@ func (s *SplitLearningContract) TriggerClientAggregation(ctx contractapi.Transac
 	return nil
 }
 
-// commitGlobalModelHash is called by each client after they compute the aggregated model.
-// It stores their proposed global hash in 'globalModelHashCollection' for consensus checking.
 func (s *SplitLearningContract) CommitGlobalModelHash(ctx contractapi.TransactionContextInterface, roundID string, aggregatedGlobalModelHash string, ipfsCid string) error {
 	creator, err := ctx.GetStub().GetCreator()
 	if err != nil {
@@ -450,10 +481,7 @@ func (s *SplitLearningContract) CommitGlobalModelHash(ctx contractapi.Transactio
 	return nil
 }
 
-// endGlobalModel checks for consensus on the committed global model hashes.
-// If consensus is met, it saves the final hash to the world state and emits a final event.
 func (s *SplitLearningContract) EndGlobalModel(ctx contractapi.TransactionContextInterface, roundID string) error {
-	// This function must have a strict endorsement policy (e.g., majority of clients must endorse)
 	iter, err := ctx.GetStub().GetPrivateDataByRange(
 		"globalModelHashCollection",
 		"globalCommit-"+roundID+"-",
@@ -464,9 +492,7 @@ func (s *SplitLearningContract) EndGlobalModel(ctx contractapi.TransactionContex
 	}
 	defer iter.Close()
 
-	// tally votes by PureHash
 	voteCounts := map[string]int{}
-	// remember an example IPFSCid for each hash
 	cidForHash := map[string]string{}
 	total := 0
 
@@ -492,7 +518,6 @@ func (s *SplitLearningContract) EndGlobalModel(ctx contractapi.TransactionContex
 		return fmt.Errorf("no commits for round %s", roundID)
 	}
 
-	// 2) Enforce threshold (e.g. 2/3)
 	const quorumRatio = 0.66
 	if float64(maxVotes)/float64(total) < quorumRatio {
 		return fmt.Errorf(
@@ -504,7 +529,6 @@ func (s *SplitLearningContract) EndGlobalModel(ctx contractapi.TransactionContex
 		)
 	}
 
-	// emit event carrying *the IPFS CID* from the winning group
 	finalCid := cidForHash[winnerHash]
 	eventName := fmt.Sprintf("GlobalModelUpdated:%s", roundID)
 	return ctx.GetStub().SetEvent(eventName, []byte(finalCid))
