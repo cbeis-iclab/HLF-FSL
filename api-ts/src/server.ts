@@ -49,6 +49,27 @@ app.post('/addGradients', async (req, res) => {
   }
 });
 
+app.post('/triggerClientAggregation', async (req, res) => {
+  const { roundID } = req.body;
+  const c = getContract();
+  try {
+    const result = await c.submitTransaction('TriggerClientAggregation', String(roundID));
+    res.json({ success: true });
+  } catch (e: any) {
+    res.status(500).json({ error: e.message });
+  }
+});
+
+app.post('/endGlobalModel', async (req, res) => {
+  const { roundID } = req.body;
+  const c = getContract();
+  try {
+    await c.submitTransaction('EndGlobalModel', String(roundID));
+    res.json({ success: true });
+  } catch (e: any) {
+    res.status(500).json({ error: e.message });
+  }
+});
 
 async function listenForChaincodeEvents() {
   const network    = getNetwork();

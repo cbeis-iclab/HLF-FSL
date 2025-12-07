@@ -1,5 +1,6 @@
 #!/usr/bin/env bash
 set -e
+
 # clean up function
 cleanup() {
   echo "⏹️  Killing processes…"
@@ -11,41 +12,56 @@ trap cleanup EXIT SIGINT SIGTERM
 echo "🔨 Building project…"
 npm run build
 
-echo "🚀 Starting server on HTTP=3000 WS=8080"
-ORG_NAME=Admin PEER_NAME=peer0 \
-MSP_ID=AdminMSP \
-PEER_ENDPOINT=localhost:7050 PEER_HOST_ALIAS=peer0.admin.example.com \
-CRYPTO_PATH="$PWD/test-network/organizations/peerOrganizations/admin.example.com" \
+# 1. Arrancar Servidor (Org1)
+echo "🚀 Starting Admin server on HTTP=3000 WS=8080"
+ORG_NAME=org1 PEER_NAME=peer0 \
+MSP_ID=Org1MSP \
+PEER_ENDPOINT=localhost:7051 PEER_HOST_ALIAS=peer0.org1.example.com \
+CRYPTO_PATH="$PWD/test-network/organizations/peerOrganizations/org1.example.com" \
 PORT=3000 WS_PORT=8080 \
 node dist/server.js &
 pids+=($!)
 
-# Define as many clients as you like here: user→org mapping
-CLIENTS=(
-  "User1:org1"
-  "User1:org2"
-)
+# 2. Preguntar cantidad de clientes
+read -p "👥 ¿Cuántos clientes quieres levantar? (ej. 2): " num_clients
 
-# Base ports
+# Base ports para los clientes
 http_port=3001
 ws_port=8081
 
-for entry in "${CLIENTS[@]}"; do
-  # split "User1:org1" → user=User1, org=org1
-  IFS=: read -r user org <<< "$entry"
-  peer="peer0"   # or make this part of your pair if you need peer1, peer2, etc.
+# 3. Bucle para generar clientes dinámicamente
+# Si num_clients es 2, el bucle corre para i=1 y i=2.
+# i=1 -> Org2 (1+1)
+# i=2 -> Org3 (2+1)
+for (( i=1; i<=num_clients; i++ )); do
+  
+  # Calculamos la organización destino (Server es org1, así que clientes empiezan en org2)
+  org_num=$(( i + 1 ))
+  org="org${org_num}"
+  user="User1"     # Por defecto User1, como pediste
+  peer="peer0"
 
-  # derive the rest
-  msp="${org^}MSP"  # org1→Org1MSP, org2→Org2MSP
-  if [[ $org == "org1" ]]; then
-    endpoint="localhost:7051"
-  else
-    endpoint="localhost:9051"
-  fi
+  # --- Lógica dinámica de puertos ---
+  case $org_num in
+    2)
+      # Puerto estándar Org2
+      port=9051
+      ;;
+    *)
+      port=$(( 11051 + (org_num - 3) * 5 ))
+      ;;
+  esac
+  
+  endpoint="localhost:${port}"
+  # ----------------------------------
+
+  # Derivar resto de variables
+  msp="${org^}MSP"  # org2 -> Org2MSP
   alias="${peer}.${org}.example.com"
   crypto="$PWD/test-network/organizations/peerOrganizations/${org}.example.com"
 
-  echo "🤖  Starting client for $user (@${org}) on HTTP=${http_port} WS=${ws_port}"
+  echo "🤖  Starting client #$i: $user (@${org}) on HTTP=${http_port} WS=${ws_port} -> Peer: $endpoint"
+
   ORG_NAME=$org PEER_NAME=$peer \
   MSP_ID=$msp \
   PEER_ENDPOINT=$endpoint PEER_HOST_ALIAS=$alias \

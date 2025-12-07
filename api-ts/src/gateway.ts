@@ -53,6 +53,11 @@ export async function initGateway(): Promise<void> {
   //
   // 3) Build one TLS+gRPC client
   //
+  console.log('🌐 orgName     =', orgName);
+  console.log('🌐 peerEndpoint=', peerEndpoint);
+  console.log('🌐 peerHostAlias=', peerHostAlias);
+  console.log('🌐 tlsCertPath =', tlsCertPath);
+
   const tlscert = await fs.readFile(tlsCertPath);
   const creds   = grpc.credentials.createSsl(tlscert);
   client = new grpc.Client(peerEndpoint, creds, {
