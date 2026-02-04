@@ -133,65 +133,71 @@ app.post('/endGlobalModel', async (req, res) => {
 });
 
 // listen for GradientsAdded events
+// Inside client.ts
+
 async function listenForChaincodeEvents() {
   const network    = getNetwork();
   const ccName     = process.env.CHAINCODE_NAME || 'fsl';
-  const events     = await network.getChaincodeEvents(ccName);
+  console.log(`👂 [Client] Starting event listener for chaincode: ${ccName}`);
+  
+  const events = await network.getChaincodeEvents(ccName);
 
   for await (const ev of events) {
-    const raw       = Buffer.from(ev.payload).toString('utf8');
+    const eventName = ev.eventName;
+
+    // Decode payload safely
+    const raw = utf8Decoder.decode(ev.payload);
     let payload: any = {};
-    try { payload = JSON.parse(raw) } catch { /* ignore */ }
-
-    if (!wsClient || wsClient.readyState !== wsClient.OPEN) {
-      continue;
+    try { 
+        payload = JSON.parse(raw); 
+    } catch { 
+        console.log(`⚠️ Could not parse payload for ${eventName}`); 
     }
 
-    if (
-      ev.eventName.startsWith('GradientsAdded:')
-    ) {
-      wsClient.send(JSON.stringify({
-        event:     'GradientsAdded',
-        payload: {
-          clientId: clientID,
-          dataHash: payload.dataHash,
-          txID:     payload.txID,
-          mspID:    payload.mspID
-        }
-      }));
+    // 1. Handle Gradients
+    if (eventName.startsWith('GradientsAdded:')) {
+      if (wsClient && wsClient.readyState === wsClient.OPEN) {
+        wsClient.send(JSON.stringify({
+          event:     'GradientsAdded',
+          payload: {
+            clientId: clientID,
+            dataHash: payload.dataHash,
+            txID:     payload.txID,
+            mspID:    payload.mspID
+          }
+        }));
+      }
     }
 
-    // Aggregator says “here’s the list of client model updates to aggregate”
-    if (ev.eventName.startsWith('AggregationTaskStart:')) {
-      // decode the raw Fabric payload bytes into a string…
-      const raw = utf8Decoder.decode(ev.payload);
-      let parsed;
-      try {
-        parsed = JSON.parse(raw);   // { roundID: "...", updates: [...] }
-      } catch (err) {
-        console.error('⛔️ Failed to parse AggregationTaskStart payload:', raw);
-        return;
+    // 2. Handle Aggregation Start (THE MISSING PIECE)
+    if (eventName.startsWith('AggregationTaskStart:')) {
+      console.log(`⚡️ Aggregation Trigger detected! Payload size: ${raw.length} chars`);
+      
+      if (!wsClient || wsClient.readyState !== wsClient.OPEN) {
+        console.error(`❌ [CRITICAL] WS Client not connected! Cannot forward AggregationTaskStart to Python.`);
+        continue;
       }
 
-      // fire your WS event with the full parsed struct
+      console.log(`📤 Forwarding AggregationTaskStart to Python Client via WS...`);
       wsClient.send(JSON.stringify({
         event:   'AggregationTaskStart',
-        payload: parsed            // has .roundID (string) and .updates (ClientModelUpdate[])
+        payload: payload // contains { roundID, updates: [...] }
       }));
     }
 
-    // Final global‐model hash published 
-    if (ev.eventName.startsWith('GlobalModelUpdated:')) {
-      const roundID     = ev.eventName.split(':')[1];
-      const consensus   = raw;  // this event’s payload is just the hash string
-      wsClient.send(JSON.stringify({
-        event:   'GlobalModelUpdated',
-        payload: { roundID, consensusHash: consensus }
-      }));
+    // 3. Handle Global Model Update
+    if (eventName.startsWith('GlobalModelUpdated:')) {
+      const roundID = eventName.split(':')[1];
+      console.log(`🌍 Global Model Updated for Round ${roundID}`);
+      
+      if (wsClient && wsClient.readyState === wsClient.OPEN) {
+        wsClient.send(JSON.stringify({
+          event:   'GlobalModelUpdated',
+          payload: { roundID, consensusHash: raw }
+        }));
+      }
     }
   }
-
-  events.close();
 }
 
 async function main() {

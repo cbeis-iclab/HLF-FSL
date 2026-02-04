@@ -2,124 +2,255 @@
 
 Decentralized Federated Split Learning (FSL) on Hyperledger Fabric using transient fields, Private Data Collections, and off-chain storage for large parameters.
 
-Based on: Beis-Penedo et al., “HLF-FSL: A Decentralized Federated Split Learning Solution for IoT on Hyperledger Fabric” 
+This repository implements the framework described in the paper: *“HLF-FSL: A Decentralized Federated Split Learning Solution for IoT on Hyperledger Fabric”* (Beis-Penedo et al.) DOI: [10.1016/j.array.2026.100685](https://doi.org/10.1016/j.array.2026.100685). It addresses the challenge of training Split Learning models in a decentralized, trustless environment by leveraging Blockchain for coordination and IPFS for off-chain storage of large model parameters.
 
-### Architecture Overview
+[![License](https://img.shields.io/badge/License-Apache%202.0-blue.svg)](LICENSE)
+[![Python](https://img.shields.io/badge/Python-3.8%2B-blue)](https://www.python.org/)
+[![Node](https://img.shields.io/badge/Node-16%2B-green)](https://nodejs.org/)
+[![Hyperledger Fabric](https://img.shields.io/badge/Hyperledger%20Fabric-2.x-black)](https://www.hyperledger.org/use/fabric)
 
-The system consists of four main components:
-1.  **Hyperledger Fabric Network**: Provides the decentralized trust layer. It manages participant identities (via MSPs), records hashes of model updates, and enforces access control policies for private data collections.
-2.  **IPFS (InterPlanetary File System)**: Acts as the off-chain storage for large data objects. Instead of bloating the blockchain, we store bulky ML data (activations, gradients, model weights) in IPFS and record only their immutable content identifiers (CIDs) on the ledger.
-3.  **TypeScript API Servers**: These act as secure proxies between the Python ML application and the Fabric network. Each participating organization runs its own API server, which holds the cryptographic identity necessary to interact with the blockchain on its behalf.
-4.  **Python ML Application**: This is the core Split Federated Learning application. It uses `PyTorch` to define and train the split models. It runs multiple client threads and a server thread, which communicate with their respective API servers to interact with the Fabric network and use a local IPFS interface for data exchange.
+---
 
-### Project Overview
+## 📖 Table of Contents
 
-This project implements Federated Split Learning on Hyperledger Fabric. Key components:
+- [Architecture Overview](#-architecture-overview)
+- [Project Structure](#-project-structure)
+- [Prerequisites](#-prerequisites)
+- [Installation & Setup](#-installation--setup)
+- [Usage Guide](#-usage-guide)
+  - [1. Launch Fabric Network](#1-launch-fabric-network)
+  - [2. Deploy Chaincode](#2-deploy-chaincode)
+  - [3. Start Services (IPFS & API)](#3-start-services-ipfs--api)
+  - [4. Run Experiment](#4-run-experiment)
+- [Scaling to More Organizations](#-scaling-to-more-organizations)
+- [Citation](#-citation)
+- [License](#-license)
 
-- **`.gitignore`**  
-  Excludes build artifacts, credentials, and other ephemeral files.
+---
 
-- **`LICENSE`**  
-  Project licensing terms.
+## 🏗 Architecture Overview
 
-- **`README.md`**  
-  This overview and usage instructions.
+The system bridges high-performance Machine Learning with Blockchain trust through four main components:
 
-- **`requirements.txt`**  
-  Python dependencies for the Fabric-client and IPFS integration.
+1.  **Hyperledger Fabric Network**: The trust layer. Manages identities (MSPs), records model update hashes, and enforces access control via Private Data Collections (PDC).
+2.  **IPFS (InterPlanetary File System)**: Off-chain storage. Stores bulky ML data (activations, gradients, weights) to avoid blockchain bloat, returning only immutable Content Identifiers (CIDs) to the ledger.
+3.  **TypeScript API Servers**: The bridge. Acts as a secure proxy between the ML application and the Fabric SDK, handling cryptographic signing and transaction submission.
+4.  **Python ML Application**: The core logic. Uses `PyTorch` for training split models, communicating with the API servers for coordination and IPFS for data exchange.
 
-- **`api-ts/`**  
-  TypeScript-based REST/WebSocket API bridge between the Python client and Fabric network.  
-  - `src/client.ts` Fabric Gateway client  
-  - `src/gateway.ts` Gateway helper  
-  - `src/server.ts` Express/WebSocket server  
-  - `package.json`, `tsconfig.json` TypeScript project config  
-  - `startserver.sh` Build & launch script
+### Interaction Flow
 
-- **`fsl-chaincode/`**  
-  Chaincode definition and deployment artifacts.  
-  - `chaincode/fsl_chaincode.go` Go smart contract implementing FSL logic  
-  - `chaincode/collections_config.json` PDC policy file  
-  - `deployFSL.sh` Installs and instantiates chaincode  
-  - `generate_collections_config.py` Generates `collections_config.json` for arbitrary MSP lists
+```mermaid
+graph TD
+    subgraph "Python Layer"
+        ML[Python ML App<br>(Client/Server Threads)]
+    end
+    
+    subgraph "Middleware Layer"
+        API[TypeScript API Server]
+        IPFS_Node[Local IPFS Node]
+    end
+    
+    subgraph "Infrastructure Layer"
+        Fabric[Hyperledger Fabric<br>(Peers/Orderers)]
+        IPFS_Net[IPFS Network]
+    end
 
-- **`src/fabric_project/`**  
-  Python-based orchestrator and experiment runner.  
-  - `client.py`, `server.py` Client/server roles for split learning  
-  - `main.py` Entry point to launch experiments  
-  - `models.py`, `evaluation.py` ML model definitions and metrics  
-  - `ipfs_interface.py`, `storage.py` IPFS integration and results persistence  
-  - `config.py` Experiment parameters (clients, epochs, network addresses)  
-  - `startIpfs.sh` Local IPFS daemon launcher  
-  - `results_fabric/` Output directory for experiment data
+    ML -->|REST/WS| API
+    ML -->|Store/Retrieve Data| IPFS_Node
+    API -->|Submit Trans/Query| Fabric
+    IPFS_Node <--> IPFS_Net
+    Fabric -.->|Store CIDs| Fabric
 
-Use this overview to navigate the codebase and locate components for network setup, chaincode deployment, API services, or experiment execution.```
+```
 
-## Prerequisites
+---
 
-- Docker & Docker Compose  
-- Hyperledger Fabric binaries (`peer`, `orderer`, `configtxgen`, `cryptogen`) in your `$PATH`  
-- Go (v1.18+)  
-- Node.js (v16+) & npm  
-- Python 3.8+ & pip  
-- IPFS CLI (`ipfs`)
+## 📂 Project Structure
 
-### Step-by-Step Execution Guide
-## Setup
+```text
+cbeis-iclab/HLF-FSL
+├── api-ts/                       # TypeScript Middleware (Fabric SDK Bridge)
+│   ├── src/                      # Source code (Gateway, Server, Client)
+│   ├── startserver.sh            # Script to build & launch the API
+│   └── package.json              # Node dependencies
+├── fsl-chaincode/                # Smart Contracts & Deployment
+│   ├── chaincode/                # Go Chaincode & PDC configs
+│   ├── deployFSL.sh              # Installation script
+│   └── generate_collections.py   # Helper to generate PDC policies
+├── src/fabric_project/           # Python ML Orchestrator
+│   ├── client.py                 # Client-side SL logic
+│   ├── server.py                 # Server-side SL logic
+│   ├── models.py                 # PyTorch model definitions
+│   ├── ipfs_interface.py         # IPFS interaction handler
+│   ├── config.py                 # Experiment configuration (epochs, clients)
+│   └── startIpfs.sh              # IPFS daemon launcher
+├── requirements.txt              # Python dependencies
+└── README.md                     # Documentation
 
-1. **Clone the repository**  
-   Use Git to clone this project and enter its directory.
+```
 
-2. **Install dependencies**  
-   - In the `api-ts` folder, install Node.js packages with `npm install`.  
-   - At the project root, install Python dependencies with `pip install -r requirements.txt`.
+---
 
-## Step 1: Launch Fabric Network
+## ✅ Prerequisites
 
-Navigate to your local Fabric test-network (from fabric-samples), bring up the network with Certificate Authorities and create the channel. This generates MSPs, CAs, peers, an orderer and joins default peers.
+Ensure the following are installed and configured in your environment:
 
-Return to the project root when complete.
+* **Docker & Docker Compose** (for running Fabric containers)
+* **Hyperledger Fabric Binaries**: `peer`, `orderer`, `configtxgen`, `cryptogen` must be in your `$PATH`.
+* **Go** (v1.18+)
+* **Node.js** (v16+) & **npm**
+* **Python** (3.8+) & **pip**
+* **IPFS CLI**: Installed and initialized (`ipfs init`).
 
-## Step 2: Generate Collections Config for 3 Orgs
+---
 
-Use the Python script in `fsl-chaincode` to generate a Private Data Collections configuration for three organizations (Org1MSP, Org2MSP, Org3MSP), including the Admin MSP in the global policy. Save the output to `chaincode/collections_config.json`. You may need to re-run the deployment script after updating this file.
+## 🛠 Installation & Setup
 
-## Step 3: Deploy Chaincode
+1. **Clone the repository**
+```bash
+git clone [https://github.com/cbeis-iclab/HLF-FSL.git](https://github.com/cbeis-iclab/HLF-FSL.git)
+cd HLF-FSL
 
-In the `fsl-chaincode` directory, run the deployment script to package, install and instantiate the `fsl` smart contract on the channel.
+```
 
-## Step 4: Start Services
 
-- **IPFS**: In `src/fabric_project`, launch the local IPFS daemon for off-chain storage. Keep this terminal open.  
-- **TypeScript APIs**: In `api-ts`, start the API servers that bridge the Python application and Fabric network. Before launching, update the `CLIENTS` array in `startserver.sh` to reflect the three organizations.
+2. **Install Python Dependencies**
+```bash
+pip install -r requirements.txt
 
-## Step 5: Run the SFL Experiment
+```
 
-In `src/fabric_project`, run the main Python application to kick off the federated split learning process. The experiment will use the number of clients and epochs specified in `config.py`, and will output results into the `results_fabric/` directory.
 
-## Scaling to More Organizations
+3. **Install Node.js Dependencies**
+```bash
+cd api-ts
+npm install
+cd ..
 
-To extend beyond three organizations:
+```
 
-1. **Fabric Crypto**  
-   Add a new OrgN entry to your crypto-config (or Fabric-CA registrar scripts) and generate MSP materials for OrgN.
 
-2. **Channel Configuration**  
-   Append `OrgNMSP` in `configtx.yaml` under the `Organizations` list and in your channel profile’s `Application.Organizations` section.
 
-3. **Docker Compose**  
-   Extend the test-network compose files to include a new peer service for `peer0.orgN.example.com`, ensuring unique port mappings.
+---
 
-4. **Network Scripts**  
-   Update `envVar.sh` and `createChannel.sh` to include OrgN in the global variables and channel-join logic.
+## 🚀 Usage Guide
 
-5. **Recreate Network**  
-   Tear down the existing network, then bring it back up with the updated definitions and join all peers.
+### 1. Launch Fabric Network
 
-6. **Application Updates**  
-   - Re-generate your PDC configuration including the new MSP.  
-   - Update the `CLIENTS` array in `api-ts/startserver.sh`.  
-   - Adjust `NUM_CLIENTS` in `src/fabric_project/config.py`.  
-   - Re-deploy the chaincode and re-run the services and experiment.
+*Note: This project assumes you have access to `fabric-samples/test-network`.*
 
-Refer to the source paper for detailed protocol design and rationale. All scripts can be further modified for fully dynamic client configurations.```
+Navigate to your Fabric test network directory, tear down any existing network, and bring up a fresh one with a Certificate Authority (CA).
+
+```bash
+# Example path - adjust to your local installation
+cd ~/fabric-samples/test-network
+
+./network.sh down
+./network.sh up createChannel -ca
+
+```
+
+*Return to the project root once the channel is created.*
+
+### 2. Deploy Chaincode
+
+First, generate the Private Data Collection (PDC) configuration for your organizations (Default: 3 Orgs).
+
+```bash
+# Generate PDC config
+python fsl-chaincode/generate_collections_config.py
+
+```
+
+Then, deploy the chaincode to the active channel.
+
+```bash
+cd fsl-chaincode
+./deployFSL.sh
+cd ..
+
+```
+
+### 3. Start Services (IPFS & API)
+
+**Terminal A: Start IPFS**
+Launch the local IPFS daemon to handle off-chain storage.
+
+```bash
+cd src/fabric_project
+./startIpfs.sh
+
+```
+
+**Terminal B: Start API Servers**
+*Edit `api-ts/startserver.sh` first to ensure the `CLIENTS` array matches your Fabric network organizations.*
+
+```bash
+cd api-ts
+./startserver.sh
+
+```
+
+### 4. Run Experiment
+
+**Terminal C: Run ML Application**
+Start the federated split learning process. This will initialize the server and client threads based on `src/fabric_project/config.py`.
+
+```bash
+cd src/fabric_project
+python main.py
+
+```
+
+Results will be saved to the `results_fabric/` directory.
+
+---
+
+## 📈 Scaling to More Organizations
+
+To extend the experiment beyond the default setup (Org1, Org2, Org3):
+
+1. **Crypto Material**: Generate MSPs for `OrgN` using `cryptogen` or Fabric CA.
+2. **Channel Config**: Update `configtx.yaml` to include `OrgNMSP` in the application channel.
+3. **Infrastructure**: Add `peer0.orgN.example.com` to your Docker Compose files (ensure unique ports).
+4. **Scripts**: Update `createChannel.sh` to join the new peer to the channel.
+5. **Project Config**:
+* Re-run `generate_collections_config.py` with the new MSP list.
+* Update `CLIENTS` in `api-ts/startserver.sh`.
+* Update `NUM_CLIENTS` in `src/fabric_project/config.py`.
+* Re-deploy chaincode.
+
+
+
+---
+
+## 📄 Citation
+
+If you use this code in your research, please cite the original paper:
+
+```bibtex
+@article{BEISPENEDO2026100685,
+title = {HLF-FSL: A decentralized federated split learning solution for IoT on hyperledger fabric},
+journal = {Array},
+volume = {29},
+pages = {100685},
+year = {2026},
+issn = {2590-0056},
+doi = {https://doi.org/10.1016/j.array.2026.100685},
+url = {https://www.sciencedirect.com/science/article/pii/S2590005626000081},
+author = {Carlos Beis-Penedo and Rebeca P. Díaz-Redondo and Ana Fernández-Vilas and Manuel Fernández-Veiga and Francisco Troncoso-Pastoriza},
+keywords = {Federated learning, Split learning, Federated split learning, Blockchain, Decentralized systems, Hyperledger fabric},
+abstract = {Collaborative machine learning in sensitive domains demands scalable, privacy-aware and access-controlled solutions for enterprise-grade deployment. Conventional federated learning (FL) relies on a central server, introducing single points of failure and privacy risks, while split learning (SL) partitions models for privacy but scales poorly because of sequential training. We present HLF-FSL, a decentralized architecture that combines federated split learning (FSL) with the permissioned blockchain Hyperledger Fabric (HLF). Chaincode orchestrates split-model execution and peer-to-peer aggregation without a central coordinator, leveraging HLF’s transient fields and Private Data Collections (PDCs) to keep raw data and model activations off-chain and access-controlled. On CIFAR-10, MNIST and ImageNet-Mini, HLF-FSL matches the accuracy of a standard server-coordinated FSL baseline while reducing per-epoch training time versus Ethereum-based baselines. Performance and scalability tests quantify the Fabric coordination overhead via a component-level breakdown of SDK-facing latencies and communication volumes; empirically, this overhead increases wall-clock epoch time while preserving the same accuracy-vs-epoch behavior as a FedSplit Learning baseline.}
+}
+
+```
+
+---
+
+## ⚖️ License
+
+This project is licensed under the Apache 2.0 License - see the [LICENSE](https://www.google.com/search?q=LICENSE) file for details.
+
+```
+
+```

@@ -11,6 +11,9 @@ const port = parseInt(process.env.PORT || '3000', 10);
 app.use(bodyParser.json({ limit: '300mb' }));
 app.use(bodyParser.urlencoded({ limit: '300mb', extended: true }));
 
+const EXPECTED_CLIENTS = parseInt(process.env.NUM_CLIENTS || '2', 10); // Set this in env!
+const globalCommitProgress: Record<string, Set<string>> = {};
+
 const wss = new WebSocketServer({ port: 8080, host: '0.0.0.0' });
 let wsClient: any = null;
 wss.on('connection', ws => {
@@ -81,6 +84,55 @@ async function listenForChaincodeEvents() {
     let payload: any = {};
     try { payload = JSON.parse(raw) } catch { /* ignore */ }
 
+    // --- CHANGED: Detect RoundThresholdReached and trigger aggregation ---
+    if (ev.eventName.startsWith('RoundThresholdReached:')) {
+      const roundID = ev.eventName.split(':')[1];
+      console.log(`⚡️ Round threshold reached for round ${roundID}. Triggering aggregation automatically...`);
+      
+      // The server detects the call and triggers the aggregation in the chaincode
+      try {
+        const contract = getContract();
+        await contract.submitTransaction('TriggerClientAggregation', roundID);
+        console.log(`✅ Aggregation triggered for round ${roundID}`);
+      } catch (e) {
+        console.error(`❌ Failed to auto-trigger aggregation:`, e);
+      }
+      continue;
+    }
+
+    if (ev.eventName === 'GlobalModelHashCommitted') {
+          const { roundID, clientID } = payload;
+          
+          if (!globalCommitProgress[roundID]) {
+            globalCommitProgress[roundID] = new Set();
+          }
+
+          globalCommitProgress[roundID].add(clientID);
+          const currentCount = globalCommitProgress[roundID].size;
+
+          console.log(`🗳️ [Server] Round ${roundID}: Global Commit from ${clientID} (${currentCount}/${EXPECTED_CLIENTS})`);
+
+          if (currentCount >= EXPECTED_CLIENTS) {
+            console.log(`🏁 [Server] All clients committed global model for round ${roundID}. Finalizing...`);
+            
+            // Wait a moment for Private Data to sync via Gossip (Crucial!)
+            await new Promise(resolve => setTimeout(resolve, 3000));
+
+            try {
+              const contract = getContract();
+              await contract.submitTransaction('EndGlobalModel', String(roundID));
+              console.log(`✅ [Server] EndGlobalModel successfully triggered for round ${roundID}`);
+              
+              // Cleanup memory
+              delete globalCommitProgress[roundID];
+            } catch (e) {
+              console.error(`❌ [Server] Failed to finalize global model:`, e);
+            }
+          }
+          continue;
+        }
+    // -------------------------------------------------------------------
+
     if (!wsClient || wsClient.readyState !== wsClient.OPEN) {
       continue;
     }
@@ -115,8 +167,3 @@ main().catch(err => {
   console.error('Failed to start server:', err);
   process.exit(1);
 });
-
-
-
-
-

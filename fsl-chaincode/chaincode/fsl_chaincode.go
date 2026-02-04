@@ -4,6 +4,7 @@ import (
 	"encoding/base64"
 	"encoding/json"
 	"fmt"
+	"strconv" // ADDED: needed for counter conversion
 
 	"github.com/hyperledger/fabric-chaincode-go/pkg/cid"
 	"github.com/hyperledger/fabric-chaincode-go/shim"
@@ -33,13 +34,14 @@ type GlobalModelCommit struct {
 	ClientID                  string `json:"clientID"`
 }
 
+const RegisteredMSPsKey = "ALL_REGISTERED_MSPS"
+const TotalClientsKey = "TOTAL_REGISTERED_CLIENTS"
+
 // -------------------------------------------------------------
 // HELPER: Auto-Discovery de MSPs
 // -------------------------------------------------------------
-const RegisteredMSPsKey = "ALL_REGISTERED_MSPS"
 
 func (s *SplitLearningContract) ensureMSPRegistered(stub shim.ChaincodeStubInterface, mspID string) error {
-	// 1. Leer la lista actual
 	bytes, err := stub.GetState(RegisteredMSPsKey)
 	if err != nil {
 		return fmt.Errorf("failed to read registered MSPs: %v", err)
@@ -52,14 +54,12 @@ func (s *SplitLearningContract) ensureMSPRegistered(stub shim.ChaincodeStubInter
 		}
 	}
 
-	// 2. Comprobar si ya existe
 	for _, m := range msps {
 		if m == mspID {
-			return nil // Ya está registrado, no hacemos nada
+			return nil
 		}
 	}
 
-	// 3. Si es nuevo, añadirlo y guardar
 	msps = append(msps, mspID)
 	newBytes, err := json.Marshal(msps)
 	if err != nil {
@@ -86,7 +86,6 @@ func (s *SplitLearningContract) RegisterServer(ctx contractapi.TransactionContex
 	creatorBase64 := base64.StdEncoding.EncodeToString(creator)
 	serverKey := fmt.Sprintf("server:%s", creatorBase64)
 
-	// Check if the server is already registered
 	existingTopic, err := ctx.GetStub().GetState(serverKey)
 	if err != nil {
 		return "", fmt.Errorf("failed to get state: %v", err)
@@ -99,7 +98,7 @@ func (s *SplitLearningContract) RegisterServer(ctx contractapi.TransactionContex
 	if err != nil {
 		return "", fmt.Errorf("failed to put state: %v", err)
 	}
-	return creatorBase64, nil // Return the server ID
+	return creatorBase64, nil
 }
 
 func (s *SplitLearningContract) GetServerAddress(ctx contractapi.TransactionContextInterface) ([]string, error) {
@@ -142,6 +141,7 @@ func (s *SplitLearningContract) RegisterClient(ctx contractapi.TransactionContex
 	if err != nil {
 		return "", fmt.Errorf("failed to get state: %v", err)
 	}
+
 	if existingServer != nil {
 		return creatorBase64, nil
 	}
@@ -160,11 +160,20 @@ func (s *SplitLearningContract) RegisterClient(ctx contractapi.TransactionContex
 		return "", fmt.Errorf("failed to put state: %v", err)
 	}
 
-	// AUTO-DISCOVERY: Registramos el MSP del cliente al registrarse
+	// AUTO-DISCOVERY: Register MSP
 	mspID, err := cid.GetMSPID(stub)
 	if err == nil {
 		s.ensureMSPRegistered(stub, mspID)
 	}
+
+	totalClientsBytes, _ := stub.GetState(TotalClientsKey)
+	var currentTotal int = 0
+	if totalClientsBytes != nil {
+		currentTotal, _ = strconv.Atoi(string(totalClientsBytes))
+	}
+	currentTotal++
+	stub.PutState(TotalClientsKey, []byte(strconv.Itoa(currentTotal)))
+	// -----------------------------------------------
 
 	return creatorBase64, nil
 }
@@ -184,9 +193,7 @@ func (s *SplitLearningContract) AddIntermediateData(ctx contractapi.TransactionC
 		return fmt.Errorf("GetMSPID failed: %v", err)
 	}
 
-	// ✅ AUTO-DISCOVERY: Aseguramos que este MSP esté en la lista global
 	if err := s.ensureMSPRegistered(stub, mspID); err != nil {
-		// Logueamos pero no fallamos la transacción por esto si es un error menor de concurrencia
 		fmt.Printf("Warning: failed to register MSP dynamically: %v\n", err)
 	}
 
@@ -338,7 +345,6 @@ func (s *SplitLearningContract) SubmitClientModelHash(ctx contractapi.Transactio
 		return fmt.Errorf("GetMSPID failed: %v", err)
 	}
 
-	// ✅ AUTO-DISCOVERY: Por si acaso no se registró antes
 	s.ensureMSPRegistered(stub, mspID)
 
 	tm, err := stub.GetTransient()
@@ -376,6 +382,27 @@ func (s *SplitLearningContract) SubmitClientModelHash(ctx contractapi.Transactio
 		return fmt.Errorf("PutState failed: %v", err)
 	}
 
+	roundCounterKey := fmt.Sprintf("RoundSubmissionCount_%s", roundID)
+	roundCountBytes, _ := stub.GetState(roundCounterKey)
+	currentRoundCount := 0
+	if roundCountBytes != nil {
+		currentRoundCount, _ = strconv.Atoi(string(roundCountBytes))
+	}
+	currentRoundCount++
+	stub.PutState(roundCounterKey, []byte(strconv.Itoa(currentRoundCount)))
+
+	totalClientsBytes, _ := stub.GetState(TotalClientsKey)
+	totalClients := 0
+	if totalClientsBytes != nil {
+		totalClients, _ = strconv.Atoi(string(totalClientsBytes))
+	}
+
+	if totalClients > 0 && currentRoundCount >= totalClients {
+		eventName := fmt.Sprintf("RoundThresholdReached:%s", roundID)
+		stub.SetEvent(eventName, []byte(roundID))
+	}
+	// ---------------------------------------------------
+
 	return nil
 }
 
@@ -389,10 +416,6 @@ func (s *SplitLearningContract) TriggerClientAggregation(ctx contractapi.Transac
 	var msps []string
 	if bytes != nil {
 		json.Unmarshal(bytes, &msps)
-	}
-
-	if len(msps) == 0 {
-		msps = []string{"Org1MSP", "Org2MSP"}
 	}
 
 	prefix := fmt.Sprintf("clientUpdate-%s-", roundID)
@@ -477,6 +500,17 @@ func (s *SplitLearningContract) CommitGlobalModelHash(ctx contractapi.Transactio
 	if err != nil {
 		return fmt.Errorf("failed to put global model commit in PDC: %v", err)
 	}
+
+	eventPayload := map[string]string{
+		"roundID":  roundID,
+		"clientID": clientID,
+	}
+	payloadBytes, _ := json.Marshal(eventPayload)
+
+	if err := ctx.GetStub().SetEvent("GlobalModelHashCommitted", payloadBytes); err != nil {
+		return fmt.Errorf("failed to set event: %v", err)
+	}
+	// --------------------------------------------------
 
 	return nil
 }
