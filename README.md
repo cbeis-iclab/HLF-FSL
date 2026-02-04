@@ -39,7 +39,6 @@ The system bridges high-performance Machine Learning with Blockchain trust throu
 
 ### Interaction Flow
 
-### Interaction Flow
 
 ```mermaid
 graph TD
