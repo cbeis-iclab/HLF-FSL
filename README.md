@@ -39,10 +39,12 @@ The system bridges high-performance Machine Learning with Blockchain trust throu
 
 ### Interaction Flow
 
+### Interaction Flow
+
 ```mermaid
 graph TD
     subgraph "Python Layer"
-        ML[Python ML App<br>(Client/Server Threads)]
+        ML["Python ML App<br>(Client/Server Threads)"]
     end
     
     subgraph "Middleware Layer"
@@ -51,7 +53,7 @@ graph TD
     end
     
     subgraph "Infrastructure Layer"
-        Fabric[Hyperledger Fabric<br>(Peers/Orderers)]
+        Fabric["Hyperledger Fabric<br>(Peers/Orderers)"]
         IPFS_Net[IPFS Network]
     end
 
@@ -60,9 +62,7 @@ graph TD
     API -->|Submit Trans/Query| Fabric
     IPFS_Node <--> IPFS_Net
     Fabric -.->|Store CIDs| Fabric
-
 ```
-
 ---
 
 ## 📂 Project Structure
