@@ -42,25 +42,42 @@ The system bridges high-performance Machine Learning with Blockchain trust throu
 
 ```mermaid
 graph TD
-    subgraph "Python Layer"
-        ML["Python ML App<br>(Client/Server Threads)"]
-    end
+
+    classDef local fill:#e1f5fe,stroke:#01579b,stroke-width:2px;
+    classDef network fill:#fff3e0,stroke:#ff6f00,stroke-width:2px,stroke-dasharray: 5 5;
     
-    subgraph "Middleware Layer"
-        API[TypeScript API Server]
-        IPFS_Node[Local IPFS Node]
-    end
-    
-    subgraph "Infrastructure Layer"
-        Fabric["Hyperledger Fabric<br>(Peers/Orderers)"]
-        IPFS_Net[IPFS Network]
+    subgraph Shared_Infra ["☁️ Shared Infrastructure (Network)"]
+        direction TB
+        Fabric[("Hyperledger Fabric Network<br>(Orderers & Peers)")]:::network
+        IPFS_Swarm((IPFS Public Swarm)):::network
     end
 
-    ML -->|REST/WS| API
-    ML -->|Store/Retrieve Data| IPFS_Node
-    API -->|Submit Trans/Query| Fabric
-    IPFS_Node <--> IPFS_Net
-    Fabric -.->|Store CIDs| Fabric
+    subgraph Org_Node ["🏢 Local Organization Unit (Repeated per Client)"]
+        direction TB
+        
+        subgraph App_Layer ["Application Scope"]
+            ML("Python ML App<br>(Client/Server Logic)"):::local
+        end
+        
+        subgraph Middleware_Layer ["Local Middleware Scope"]
+            API["TypeScript API<br>(Fabric SDK Adapter)"]:::local
+            IPFS_Local["Local IPFS Node<br>(Daemon)"]:::local
+        end
+        
+        %% Conexiones internas (Local)
+        ML == "1. Tensors (Activations/Grads)" ==> IPFS_Local
+        IPFS_Local -.->|2. Return CID| ML
+        ML -->|3. Submit CID + Metadata| API
+        
+        %% Conexiones externas (Red)
+        API -->|"4. Invoke Chaincode (PDC)"| Fabric
+        IPFS_Local <-->|"P2P Sync"| IPFS_Swarm
+        Fabric -.->|"5. Event: New Model Update"| API
+    end
+
+    %% Leyenda explicativa visual
+    linkStyle 0 stroke:#2ecd71,stroke-width:3px;
+    linkStyle 3 stroke:#2980b9,stroke-width:3px;
 ```
 ---
 
