@@ -42,9 +42,14 @@ The system bridges high-performance Machine Learning with Blockchain trust throu
 
 ```mermaid
 graph TD
-
-    classDef local fill:#e1f5fe,stroke:#01579b,stroke-width:2px;
-    classDef network fill:#fff3e0,stroke:#ff6f00,stroke-width:2px,stroke-dasharray: 5 5;
+    %% DEFINICIÓN DE CLASES (ESTILOS)
+    %% stroke: borde, fill: fondo, color: texto
+    
+    %% Clase "local": Fondo gris muy suave, Borde Azul GitHub, Texto NEGRO
+    classDef local fill:#f6f8fa,stroke:#0969da,stroke-width:2px,color:#000000
+    
+    %% Clase "network": Fondo amarillo suave, Borde Naranja, Texto NEGRO
+    classDef network fill:#fff8c5,stroke:#bf8700,stroke-width:2px,stroke-dasharray: 5 5,color:#000000
     
     subgraph Shared_Infra ["☁️ Shared Infrastructure (Network)"]
         direction TB
@@ -66,8 +71,8 @@ graph TD
         
         %% Conexiones internas (Local)
         ML == "1. Tensors (Activations/Grads)" ==> IPFS_Local
-        IPFS_Local -.->|2. Return CID| ML
-        ML -->|3. Submit CID + Metadata| API
+        IPFS_Local -.->|"2. Return CID"| ML
+        ML -->|"3. Submit CID + Metadata"| API
         
         %% Conexiones externas (Red)
         API -->|"4. Invoke Chaincode (PDC)"| Fabric
@@ -75,9 +80,15 @@ graph TD
         Fabric -.->|"5. Event: New Model Update"| API
     end
 
-    %% Leyenda explicativa visual
-    linkStyle 0 stroke:#2ecd71,stroke-width:3px;
-    linkStyle 3 stroke:#2980b9,stroke-width:3px;
+    %% ESTILOS DE LÍNEAS (LINKS)
+    %% Link 0 (ML ==> IPFS): Verde para datos
+    linkStyle 0 stroke:#1f883d,stroke-width:3px,color:#000000
+    
+    %% Link 3 (API --> Fabric): Azul para control
+    linkStyle 3 stroke:#0969da,stroke-width:3px,color:#000000
+    
+    %% Resto de links: Gris oscuro
+    linkStyle default stroke:#6e7781,stroke-width:2px,color:#000000
 ```
 ---
 
